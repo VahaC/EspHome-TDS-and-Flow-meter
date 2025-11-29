@@ -1,0 +1,252 @@
+esphome:
+  name: reverse_osmosis_meter
+  friendly_name: Esp32C6 Reverse Osmosis TDS and Flow Meter
+
+esp32:
+  board: esp32-c6-devkitc-1
+  framework:
+    type: esp-idf
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "G5ZLWT75Aiq3gRiS5Iq8CvxcbP3Znjx/TIKqPMZzMyo="
+
+ota:
+  - platform: esphome
+    password: "74157ab02f1d3fea65a3cb7518679d16"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Esp32C6-Tds-Meter"
+    password: "uhv4aaRh8c3Q"
+
+captive_portal:
+
+debug:
+  update_interval: 5s
+
+text_sensor:
+  - platform: debug
+    device:
+      name: "Device Info"
+    reset_reason:
+      name: "Reset Reason"
+
+sensor:
+  # ---------- TDS VOLTAGE SENSORS (IN / OUT) ----------
+
+  # Raw ADC for TDS IN (voltage)
+  - platform: adc
+    id: tds_in_voltage
+    pin: 3                # TDS IN analog output
+    attenuation: 11db     # full range up to ~3.3V
+    update_interval: 200ms
+    internal: true       # temporary visible in HA for diagnostics
+    accuracy_decimals: 3
+    filters:
+      - median:
+          window_size: 7
+          send_every: 1
+          send_first_at: 1
+      - sliding_window_moving_average:
+          window_size: 20   # ~4 seconds smoothing (20 * 0.2s)
+          send_every: 5     # send to HA roughly once per second
+
+  # Raw ADC for TDS OUT (voltage)
+  - platform: adc
+    id: tds_out_voltage
+    pin: 2                # TDS OUT analog output
+    attenuation: 11db
+    update_interval: 200ms
+    internal: false
+    accuracy_decimals: 3
+    filters:
+      - median:
+          window_size: 7
+          send_every: 1
+          send_first_at: 1
+      - sliding_window_moving_average:
+          window_size: 20
+          send_every: 5
+
+  # ---------- NTC FOR TDS IN ----------
+
+  # ADC for NTC in TDS IN probe
+  - platform: adc
+    id: ntc_in_adc
+    pin: 4                # GPIO for NTC (IN)
+    attenuation: 6db
+    update_interval: 1s
+    internal: true
+    accuracy_decimals: 4
+
+  # Convert ADC -> resistance (NTC downstream: 3.3V -> 10k -> node -> NTC -> GND)
+  - platform: resistance
+    id: ntc_in_resistance
+    sensor: ntc_in_adc
+    configuration: DOWNSTREAM
+    resistor: 10kOhm       # fixed resistor from 3.3V to node
+    internal: true
+
+  # NTC temperature for TDS IN
+  - platform: ntc
+    id: tds_in_temperature
+    sensor: ntc_in_resistance
+    name: "TDS IN Temperature"
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer-water
+    accuracy_decimals: 0   # Send integer °C to Home Assistant
+    calibration:
+      b_constant: 4200
+      reference_temperature: 26.5°C
+      reference_resistance: 9.06kOhm
+    filters:
+      - sliding_window_moving_average:
+          window_size: 10
+          send_every: 1
+
+  # ---------- NTC FOR TDS OUT ----------
+
+  # ADC for NTC in TDS OUT probe
+  - platform: adc
+    id: ntc_out_adc
+    pin: 5                # GPIO for NTC (OUT)
+    attenuation: 6db
+    update_interval: 1s
+    internal: true
+    accuracy_decimals: 4
+
+  - platform: resistance
+    id: ntc_out_resistance
+    sensor: ntc_out_adc
+    configuration: DOWNSTREAM
+    resistor: 10kOhm
+    internal: true
+
+  - platform: ntc
+    id: tds_out_temperature
+    sensor: ntc_out_resistance
+    name: "TDS OUT Temperature"
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer-water
+    accuracy_decimals: 0   # Send integer °C to Home Assistant
+    calibration:
+      b_constant: 4200
+      reference_temperature: 26.5°C
+      reference_resistance: 9.06kOhm
+    filters:
+      - sliding_window_moving_average:
+          window_size: 10
+          send_every: 1
+
+  # ---------- TDS CALCULATIONS (IN / OUT) ----------
+
+  # Calculated TDS for IN (ppm)
+  - platform: template
+    id: tds_in_ppm
+    name: "TDS IN"
+    unit_of_measurement: "ppm"
+    icon: "mdi:water-opacity"
+    accuracy_decimals: 0
+    update_interval: 1s
+    lambda: |-
+      // Water temperature from NTC (IN). Fallback to 25°C if not ready.
+      float waterTemperatureC = id(tds_in_temperature).state;
+      if (isnan(waterTemperatureC)) {
+        waterTemperatureC = 25.0f;
+      }
+
+      // Voltage from ADC (already in Volts)
+      float voltage = id(tds_in_voltage).state;
+
+      // Temperature compensation (2% per °C from 25°C)
+      float compensationCoefficient = 1.0f + 0.02f * (waterTemperatureC - 25.0f);
+      float compensatedVoltage = voltage / compensationCoefficient;
+
+      // Base TDS formula (DFRobot polynomial)
+      float tds = (133.42f * compensatedVoltage * compensatedVoltage * compensatedVoltage
+                   - 255.86f * compensatedVoltage * compensatedVoltage
+                   + 857.39f * compensatedVoltage) * 0.5f;
+
+      // Calibration factor for IN
+      const float CAL_FACTOR_IN = 0.727f;
+
+      return tds * CAL_FACTOR_IN;
+    filters:
+      - sliding_window_moving_average:
+          window_size: 10
+          send_every: 1
+
+  # Calculated TDS for OUT (ppm)
+  - platform: template
+    id: tds_out_ppm
+    name: "TDS OUT"
+    unit_of_measurement: "ppm"
+    icon: "mdi:water-opacity"
+    accuracy_decimals: 0
+    update_interval: 1s
+    lambda: |-
+      float waterTemperatureC = id(tds_out_temperature).state;
+      if (isnan(waterTemperatureC)) {
+        waterTemperatureC = 25.0f;
+      }
+
+      float voltage = id(tds_out_voltage).state;
+
+      float compensationCoefficient = 1.0f + 0.02f * (waterTemperatureC - 25.0f);
+      float compensatedVoltage = voltage / compensationCoefficient;
+
+      float tds = (133.42f * compensatedVoltage * compensatedVoltage * compensatedVoltage
+                   - 255.86f * compensatedVoltage * compensatedVoltage
+                   + 857.39f * compensatedVoltage) * 0.5f;
+
+      const float CAL_FACTOR_OUT = 0.727f;
+
+      return tds * CAL_FACTOR_OUT;
+    filters:
+      - sliding_window_moving_average:
+          window_size: 10
+          send_every: 1
+
+  # ---------- WATER FLOW SENSOR (YF-S402B) ----------
+
+  # Flow rate in L/min
+  - platform: pulse_counter
+    id: water_in_flow_l_min
+    name: "Water In Flow Rate"
+    pin:
+      number: 6              # GPIO for yellow wire from flow sensor
+      mode:
+        input: true
+        pullup: true         # use internal pull-up to 3.3V
+    unit_of_measurement: "L/min"
+    icon: "mdi:water-pump"
+    update_interval: 1s
+    accuracy_decimals: 2
+    filters:
+      # Spec: F(Hz) = 38 * Q(L/min)  =>  ~2280 pulses per liter
+      # pulse_counter дає pulses/min, тому:
+      #   Q(L/min) = pulses_per_min / 2280
+      # Calibrated: ~1637 pulses per liter  =>  L/min = pulses_per_min / 1637
+      - multiply: 0.00061086
+
+  # Integrated total volume in liters, stored across reboots
+  - platform: integration
+    id: water_in_total_l
+    name: "Water In Total"
+    sensor: water_in_flow_l_min
+    time_unit: min           # integrate L/min over minutes => liters
+    unit_of_measurement: "L"
+    device_class: water
+    state_class: total_increasing
+    accuracy_decimals: 2
+    integration_method: trapezoid
+    restore: true            # store value in flash so it survives reboot
