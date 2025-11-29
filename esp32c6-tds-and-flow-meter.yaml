@@ -13,11 +13,11 @@ logger:
 # Enable Home Assistant API
 api:
   encryption:
-    key: "G5ZLWT75Aiq3gRiS5Iq8CvxcbP3Znjx/TIKqPMZzMyo="
+    key: !secret reverse_osmosis_meter_encryption_key 
 
 ota:
   - platform: esphome
-    password: "74157ab02f1d3fea65a3cb7518679d16"
+    password: !secret reverse_osmosis_meter_encryption_key 
 
 wifi:
   ssid: !secret wifi_ssid
@@ -66,7 +66,7 @@ sensor:
     pin: 2                # TDS OUT analog output
     attenuation: 11db
     update_interval: 200ms
-    internal: false
+    internal: true
     accuracy_decimals: 3
     filters:
       - median:
