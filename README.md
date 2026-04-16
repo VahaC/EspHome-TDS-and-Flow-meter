@@ -2,7 +2,7 @@
 
 ESPHome configuration for an ESP32-C6 based reverse osmosis monitor that reads Total Dissolved Solids (TDS) before and after the RO membrane, water temperatures via NTCs, and live/total flow using a YF-S402B hall-effect flow meter. The main configuration lives in `esp32c6-tds-and-flow-meter.yaml`.
 
-Blog with detail explanation https://vahac.com/diy-a-smart-reverse-osmosis-tds-flow-meter-with-esphome-and-esp32c6/
+[Blog with detail explanation](https://vahac.com/diy-a-smart-reverse-osmosis-tds-flow-meter-with-esphome-and-esp32c6?utm_source=github)
 
 ## Features
 - Two analog TDS probes (in/out) with temperature compensation and smoothing
